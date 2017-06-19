@@ -86,7 +86,7 @@ class TestSpec extends FlatSpec with Matchers {
     df.createClickhouseTable(db, tableName, "mock_date", Seq("name"), clusterNameO = clusterName)
 
     // save data
-    val res = df.saveToClickhouse("tmp1", "t1", (row) => java.sql.Date.valueOf("2000-12-01"), "mock_date", clusterNameO = clusterName)
+    val res = df.saveToClickhouse("tmp1", "t1", clusterNameO = clusterName)
     assert(res.size == 1)
     assert(res.get("localhost") == Some(df.count()))
 

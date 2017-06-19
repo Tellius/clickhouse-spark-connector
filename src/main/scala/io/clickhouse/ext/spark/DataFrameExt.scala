@@ -29,10 +29,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
-  def createClickhouseTable(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
+  def createClickhouseTable(dbName: String, tableName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
                            (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
-    val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName, partitionColumnName, indexColumns)
+    val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName, indexColumns)
     clusterNameO match {
       case None => client.query(sqlStmt)
       case Some(clusterName) =>
@@ -44,7 +44,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
-  def saveToClickhouse(dbName: String, tableName: String, partitionFunc: (org.apache.spark.sql.Row) => java.sql.Date, partitionColumnName: String = "mock_date", clusterNameO: Option[String] = None, batchSize: Int = 100000)
+  def saveToClickhouse(dbName: String, tableName: String, clusterNameO: Option[String] = None, batchSize: Int = 100000)
                       (implicit ds: ClickHouseDataSource)={
 
     val defaultHost = ds.getHost
@@ -71,7 +71,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       // explicit closing
       using(targetHostDs.getConnection) { conn =>
 
-        val insertStatementSql = generateInsertStatment(schema, dbName, clusterTableName, partitionColumnName)
+        val insertStatementSql = generateInsertStatment(schema, dbName, clusterTableName)
         val statement = conn.prepareStatement(insertStatementSql)
 
         var totalInsert = 0
@@ -82,20 +82,16 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
           counter += 1
           val row = partition.next()
 
-          // create mock date
-          val partitionVal = partitionFunc(row)
-          statement.setDate(1, partitionVal)
-
           // map fields
           schema.foreach{ f =>
             val fieldName = f.name
             val fieldIdx = row.fieldIndex(fieldName)
             val fieldVal = row.get(fieldIdx)
             if(fieldVal != null)
-              statement.setObject(fieldIdx + 2, fieldVal)
+              statement.setObject(fieldIdx + 1, fieldVal)
             else{
               val defVal = defaultNullValue(f.dataType, fieldVal)
-              statement.setObject(fieldIdx + 2, defVal)
+              statement.setObject(fieldIdx + 1, defVal)
             }
           }
           statement.addBatch()
@@ -125,8 +121,8 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       .map(x => (x._1, x._2.map(_._2).sum))
   }
 
-  private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String, partitionColumnName: String) = {
-    val columns = partitionColumnName :: schema.map(f => f.name).toList
+  private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String) = {
+    val columns = schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
     s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
   }
@@ -141,19 +137,19 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     case _ => null
   }
 
-  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String])= {
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, indexColumns: Seq[String])= {
 
     val header = s"""
           CREATE TABLE IF NOT EXISTS $dbName.$tableName(
           """
 
-    val columns = s"$partitionColumnName Date" :: df.schema.map{ f =>
+    val columns = df.schema.map{ f =>
       Seq(f.name, sparkType2ClickhouseType(f.dataType)).mkString(" ")
     }.toList
     val columnsStr = columns.mkString(",\n")
 
     val footer = s"""
-          )ENGINE = MergeTree($partitionColumnName, (${indexColumns.mkString(",")}), 8192);
+          )ENGINE = Log;
           """
 
     Seq(header, columnsStr, footer).mkString("\n")
