@@ -132,6 +132,82 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       .map(x => (x._1, x._2.map(_._2).sum))
   }
 
+    def saveToClickhouse(dbName: String, tableName: String, batchSize: Int)(implicit ds: ClickHouseDataSource) = {
+      
+    val defaultHost = ds.getHost
+    val defaultPort = ds.getPort
+
+    val (clusterTableName, clickHouseHosts) = (tableName, Seq(defaultHost))
+
+    val schema = df.schema
+
+    // following code is going to be run on executors
+    val insertResults = df.rdd.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+
+      val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
+      val targetHost = clickHouseHosts(rnd)
+      val targetHostDs = ClickhouseConnectionFactory.get(targetHost, defaultPort)
+
+      // explicit closing
+      using(targetHostDs.getConnection) { conn =>
+
+        val insertStatementSql = generateInsertStatment(schema, dbName, clusterTableName)
+        val statement = conn.prepareStatement(insertStatementSql)
+
+        var totalInsert = 0
+        var counter = 0
+
+        while(partition.hasNext){
+
+          counter += 1
+          val row = partition.next()
+
+          // map fields
+          schema.foreach{ f =>
+            val fieldName = f.name
+            val fieldIdx = row.fieldIndex(fieldName)
+            val fieldVal = row.get(fieldIdx)
+            if(fieldVal != null)
+              statement.setObject(fieldIdx + 1, fieldVal)
+            else{
+              val defVal = defaultNullValue(f.dataType, fieldVal)
+              statement.setObject(fieldIdx + 1, defVal)
+            }
+          }
+          statement.addBatch()
+
+          if(counter >= batchSize){
+            val r = statement.executeBatch()
+            totalInsert += r.sum
+            counter = 0
+          }
+
+        } // end: while
+
+        if(counter > 0) {
+          val r = statement.executeBatch()
+          totalInsert += r.sum
+          counter = 0
+        }
+
+        // return: Seq((host, insertCount))
+        List((targetHost, totalInsert)).toIterator
+      }
+
+    }).collect()
+
+    // aggr insert results by hosts
+    insertResults.groupBy(_._1)
+      .map(x => (x._1, x._2.map(_._2).sum))
+    }
+
+   
+  private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String) = {
+    val columns = schema.map(f => f.name).toList
+    val vals = 1 to (columns.length) map (i => "?")
+    s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
+  }
+
   private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String, partitionColumnName: String) = {
     val columns = partitionColumnName :: schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
