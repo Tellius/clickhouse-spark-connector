@@ -29,6 +29,13 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
+ def createClickhouseTable(dbName: String, tableName: String)
+                           (implicit ds: ClickHouseDataSource){
+    val client = ClickhouseClient(None)(ds)
+    val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName)
+    client.query(sqlStmt)
+   }
+
   def createClickhouseTable(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
                            (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
@@ -159,14 +166,43 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     Seq(header, columnsStr, footer).mkString("\n")
   }
 
-  private def sparkType2ClickhouseType(sparkType: org.apache.spark.sql.types.DataType)= sparkType match {
-    case LongType => "Int64"
-    case DoubleType => "Float64"
-    case FloatType => "Float32"
-    case IntegerType => "Int32"
-    case StringType => "String"
-    case BooleanType => "UInt8"
-    case _ => "unknown"
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String)= {
+
+    val header = s"""
+          CREATE TABLE IF NOT EXISTS $dbName.$tableName(
+          """
+
+    val columns = df.schema.map{ f =>
+      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+    }.toList
+    val columnsStr = columns.mkString(",\n")
+
+    val footer = s"""
+          )ENGINE = Log;
+          """
+
+    Seq(header, columnsStr, footer).mkString("\n")
+  }
+
+  private def sparkType2ClickhouseType(sparkType: org.apache.spark.sql.types.DataType,
+        nullable:Boolean = false)= {
+  
+val clickHouseType = sparkType match {
+      case LongType => "Int64"
+      case DoubleType => "Float64"
+      case FloatType => "Float32"
+      case IntegerType => "Int32"
+      case StringType => "String"
+      case BooleanType => "UInt8"
+      case TimestampType => "DateTime"
+      case DateType => "Date"
+      case NullType => "Date"
+      case _ => "unknown"
+    }
+    if(nullable)
+      s"Nullable($clickHouseType)"
+    else
+      clickHouseType
   }
 
 }
