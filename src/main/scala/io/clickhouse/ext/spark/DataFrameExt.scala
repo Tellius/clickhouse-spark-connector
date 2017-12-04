@@ -29,6 +29,13 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
+ def createClickhouseTable(dbName: String, tableName: String)
+                           (implicit ds: ClickHouseDataSource){
+    val client = ClickhouseClient(None)(ds)
+    val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName)
+    client.query(sqlStmt)
+   }
+
   def createClickhouseTable(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
                            (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
@@ -125,6 +132,82 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       .map(x => (x._1, x._2.map(_._2).sum))
   }
 
+    def saveToClickhouse(dbName: String, tableName: String, batchSize: Int)(implicit ds: ClickHouseDataSource) = {
+      
+    val defaultHost = ds.getHost
+    val defaultPort = ds.getPort
+
+    val (clusterTableName, clickHouseHosts) = (tableName, Seq(defaultHost))
+
+    val schema = df.schema
+
+    // following code is going to be run on executors
+    val insertResults = df.rdd.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+
+      val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
+      val targetHost = clickHouseHosts(rnd)
+      val targetHostDs = ClickhouseConnectionFactory.get(targetHost, defaultPort)
+
+      // explicit closing
+      using(targetHostDs.getConnection) { conn =>
+
+        val insertStatementSql = generateInsertStatment(schema, dbName, clusterTableName)
+        val statement = conn.prepareStatement(insertStatementSql)
+
+        var totalInsert = 0
+        var counter = 0
+
+        while(partition.hasNext){
+
+          counter += 1
+          val row = partition.next()
+
+          // map fields
+          schema.foreach{ f =>
+            val fieldName = f.name
+            val fieldIdx = row.fieldIndex(fieldName)
+            val fieldVal = row.get(fieldIdx)
+            if(fieldVal != null)
+              statement.setObject(fieldIdx + 1, fieldVal)
+            else{
+              val defVal = defaultNullValue(f.dataType, fieldVal)
+              statement.setObject(fieldIdx + 1, defVal)
+            }
+          }
+          statement.addBatch()
+
+          if(counter >= batchSize){
+            val r = statement.executeBatch()
+            totalInsert += r.sum
+            counter = 0
+          }
+
+        } // end: while
+
+        if(counter > 0) {
+          val r = statement.executeBatch()
+          totalInsert += r.sum
+          counter = 0
+        }
+
+        // return: Seq((host, insertCount))
+        List((targetHost, totalInsert)).toIterator
+      }
+
+    }).collect()
+
+    // aggr insert results by hosts
+    insertResults.groupBy(_._1)
+      .map(x => (x._1, x._2.map(_._2).sum))
+    }
+
+   
+  private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String) = {
+    val columns = schema.map(f => f.name).toList
+    val vals = 1 to (columns.length) map (i => "?")
+    s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
+  }
+
   private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String, partitionColumnName: String) = {
     val columns = partitionColumnName :: schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
@@ -159,14 +242,43 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     Seq(header, columnsStr, footer).mkString("\n")
   }
 
-  private def sparkType2ClickhouseType(sparkType: org.apache.spark.sql.types.DataType)= sparkType match {
-    case LongType => "Int64"
-    case DoubleType => "Float64"
-    case FloatType => "Float32"
-    case IntegerType => "Int32"
-    case StringType => "String"
-    case BooleanType => "UInt8"
-    case _ => "unknown"
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String)= {
+
+    val header = s"""
+          CREATE TABLE IF NOT EXISTS $dbName.$tableName(
+          """
+
+    val columns = df.schema.map{ f =>
+      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+    }.toList
+    val columnsStr = columns.mkString(",\n")
+
+    val footer = s"""
+          )ENGINE = Log;
+          """
+
+    Seq(header, columnsStr, footer).mkString("\n")
+  }
+
+  private def sparkType2ClickhouseType(sparkType: org.apache.spark.sql.types.DataType,
+        nullable:Boolean = false)= {
+  
+val clickHouseType = sparkType match {
+      case LongType => "Int64"
+      case DoubleType => "Float64"
+      case FloatType => "Float32"
+      case IntegerType => "Int32"
+      case StringType => "String"
+      case BooleanType => "UInt8"
+      case TimestampType => "DateTime"
+      case DateType => "Date"
+      case NullType => "Date"
+      case _ => "unknown"
+    }
+    if(nullable)
+      s"Nullable($clickHouseType)"
+    else
+      clickHouseType
   }
 
 }
