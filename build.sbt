@@ -1,7 +1,8 @@
+organization := "ru.yandex.clickhouse"
 
 name := """clickhouse-spark-connector"""
 
-version := "1.2.1"
+version := "1.2.2"
 
 scalaVersion := "2.11.7"
 

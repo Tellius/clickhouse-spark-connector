@@ -29,12 +29,20 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
- def createClickhouseTable(dbName: String, tableName: String)
+ def createClickhouseTable(dbName: String, tableName: String, clusterNameO:Option[String])
                            (implicit ds: ClickHouseDataSource){
-    val client = ClickhouseClient(None)(ds)
+    val client = ClickhouseClient(clusterNameO)(ds)
     val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName)
-    client.query(sqlStmt)
-   }
+    clusterNameO match {
+      case None => client.query(sqlStmt)
+      case Some(clusterName) =>
+        // create local table on every node
+        client.queryCluster(sqlStmt)
+        // create distrib table (view) on every node
+        val sqlStmt2 = s"CREATE TABLE IF NOT EXISTS ${dbName}.${tableName}_all AS ${dbName}.${tableName} ENGINE = Distributed($clusterName, $dbName, $tableName, rand());"
+        client.queryCluster(sqlStmt2)
+    }
+  }
 
   def createClickhouseTable(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
                            (implicit ds: ClickHouseDataSource){
@@ -132,12 +140,19 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       .map(x => (x._1, x._2.map(_._2).sum))
   }
 
-    def saveToClickhouse(dbName: String, tableName: String, batchSize: Int)(implicit ds: ClickHouseDataSource) = {
+    def saveToClickhouse(dbName: String, tableName: String, batchSize: Int, clusterNameO:Option[String])(implicit ds: ClickHouseDataSource) = {
       
     val defaultHost = ds.getHost
     val defaultPort = ds.getPort
 
-    val (clusterTableName, clickHouseHosts) = (tableName, Seq(defaultHost))
+    val (clusterTableName, clickHouseHosts) = clusterNameO match {
+      case Some(clusterName) =>
+        // get nodes from cluster
+        val client = ClickhouseClient(clusterNameO)(ds)
+        (s"${tableName}_all", client.getClusterNodes())
+      case None =>
+        (tableName, Seq(defaultHost))
+    }
 
     val schema = df.schema
 
