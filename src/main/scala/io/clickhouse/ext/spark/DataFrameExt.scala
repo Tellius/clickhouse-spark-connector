@@ -106,12 +106,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
             val fieldName = f.name
             val fieldIdx = row.fieldIndex(fieldName)
             val fieldVal = row.get(fieldIdx)
-            if(fieldVal != null)
-              statement.setObject(fieldIdx + 2, fieldVal)
-            else{
-              val defVal = defaultNullValue(f.dataType, fieldVal)
-              statement.setObject(fieldIdx + 2, defVal)
-            }
+            statement.setObject(fieldIdx + 2, fieldVal)
           }
           statement.addBatch()
 
@@ -182,12 +177,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
             val fieldName = f.name
             val fieldIdx = row.fieldIndex(fieldName)
             val fieldVal = row.get(fieldIdx)
-            if(fieldVal != null)
-              statement.setObject(fieldIdx + 1, fieldVal)
-            else{
-              val defVal = defaultNullValue(f.dataType, fieldVal)
-              statement.setObject(fieldIdx + 1, defVal)
-            }
+            statement.setObject(fieldIdx + 1, fieldVal)
           }
           statement.addBatch()
 
@@ -227,16 +217,6 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     val columns = partitionColumnName :: schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
     s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
-  }
-
-  private def defaultNullValue(sparkType: org.apache.spark.sql.types.DataType, v: Any) = sparkType match {
-    case DoubleType => 0
-    case LongType => 0
-    case FloatType => 0
-    case IntegerType => 0
-    case StringType => null
-    case BooleanType => false
-    case _ => null
   }
 
   private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String])= {
