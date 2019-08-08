@@ -3,6 +3,7 @@ import org.scalatest._
 import io.clickhouse.ext.ClickhouseConnectionFactory
 import io.clickhouse.ext.spark.ClickhouseSparkExt._
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.Row
 
 case class Row1(name: String, v: Int, v2: Int)
 
@@ -78,7 +79,7 @@ class TestSpec extends FlatSpec with Matchers {
     val clusterName = Some("perftest_1shards_1replicas"): Option[String]
 
     // define clickhouse connection
-    implicit val clickhouseDataSource = ClickhouseConnectionFactory.get(anyHost)
+    implicit val clickhouseDataSource = ClickhouseConnectionFactory.get(anyHost, 8123)
 
     // create db / table
     df.dropClickhouseDb(db, clusterName)
@@ -87,7 +88,7 @@ class TestSpec extends FlatSpec with Matchers {
     df.createClickhouseTable(db,tableName, clusterName)
 
     // save data
-    val res = df.saveToClickhouse("tmp1", "t1", (row) => java.sql.Date.valueOf("2000-12-01"), "mock_date", clusterNameO = clusterName)
+    val res = df.saveToClickhouse("tmp1", "t1", (row:Row) => java.sql.Date.valueOf("2000-12-01"), "mock_date", clusterNameO = clusterName)
     assert(res.size == 1)
     assert(res.get("localhost") == Some(df.count()))
 

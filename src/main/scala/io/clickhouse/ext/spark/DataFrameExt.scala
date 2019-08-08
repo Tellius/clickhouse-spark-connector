@@ -4,6 +4,8 @@ import io.clickhouse.ext.{ClickhouseClient, ClickhouseConnectionFactory}
 import ru.yandex.clickhouse.ClickHouseDataSource
 import io.clickhouse.ext.Utils._
 import org.apache.spark.sql.types._
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.{DataFrame, Row}
 
 object ClickhouseSparkExt{
   implicit def extraOperations(df: org.apache.spark.sql.DataFrame) = DataFrameExt(df)
@@ -59,8 +61,26 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }
   }
 
-  def saveToClickhouse(dbName: String, tableName: String, partitionFunc: (org.apache.spark.sql.Row) => java.sql.Date, partitionColumnName: String = "mock_date", clusterNameO: Option[String] = None, batchSize: Int = 100000)
-                      (implicit ds: ClickHouseDataSource)={
+  def splitRDD(df:DataFrame, splitSizeOption:Option[Int]):List[RDD[Row]] = {
+    val numOfPartitions = df.rdd.getNumPartitions
+    splitSizeOption match {
+      case Some(splitSize) => 
+        val ranges = bucketise(numOfPartitions, splitSize)
+        ranges.map{
+          case (startIndex, endIndex) =>
+            df.rdd.mapPartitionsWithIndex((index, iterator) => {
+              if(index >= startIndex && index < endIndex)
+                iterator
+              else
+                Seq[Row]().toIterator
+            })
+        }
+      case None => List(df.rdd)
+    }
+  }
+
+  def saveToClickhouse(dbName: String, tableName: String, partitionFunc: (org.apache.spark.sql.Row) => java.sql.Date, partitionColumnName: String = "mock_date", clusterNameO: Option[String] = None, batchSize: Int = 100000, maxConnections:Option[Int] = None)
+                      (implicit ds: ClickHouseDataSource):Map[String,Int] = {
 
     val defaultHost = ds.getHost
     val defaultPort = ds.getPort
@@ -76,8 +96,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
 
     val schema = df.schema
 
+    val splittedRDD = splitRDD(df, maxConnections)
+
     // following code is going to be run on executors
-    val insertResults = df.rdd.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+    val insertResults = splittedRDD.flatMap(split => split.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
 
       val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
       val targetHost = clickHouseHosts(rnd)
@@ -128,14 +150,20 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
         List((targetHost, totalInsert)).toIterator
       }
 
-    }).collect()
+    }).collect())
+
+    insertResults.groupBy(_._1)
+      .map(x => (x._1, x._2.map(_._2).sum))    
 
     // aggr insert results by hosts
-    insertResults.groupBy(_._1)
-      .map(x => (x._1, x._2.map(_._2).sum))
+    
   }
 
-    def saveToClickhouse(dbName: String, tableName: String, batchSize: Int, clusterNameO:Option[String])(implicit ds: ClickHouseDataSource) = {
+  def saveToClickhouse(dbName: String, tableName: String, batchSize: Int, clusterNameO:Option[String])(implicit ds: ClickHouseDataSource):Map[String,Int] = {
+    saveToClickhouse(dbName, tableName, batchSize, clusterNameO, None)
+  }
+
+  def saveToClickhouse(dbName: String, tableName: String, batchSize: Int, clusterNameO:Option[String], maxConnections:Option[Int])(implicit ds: ClickHouseDataSource):Map[String,Int] = {
       
     val defaultHost = ds.getHost
     val defaultPort = ds.getPort
@@ -151,8 +179,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
 
     val schema = df.schema
 
+    val splittedRDD = splitRDD(df, maxConnections)
+
     // following code is going to be run on executors
-    val insertResults = df.rdd.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+    val insertResults = splittedRDD.flatMap(split => split.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
 
       val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
       val targetHost = clickHouseHosts(rnd)
@@ -199,12 +229,12 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
         List((targetHost, totalInsert)).toIterator
       }
 
-    }).collect()
+    }).collect())
 
     // aggr insert results by hosts
     insertResults.groupBy(_._1)
       .map(x => (x._1, x._2.map(_._2).sum))
-    }
+  }
 
    
   private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String) = {
