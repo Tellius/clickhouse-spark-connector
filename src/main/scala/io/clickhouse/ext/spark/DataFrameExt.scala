@@ -27,26 +27,15 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     val client = ClickhouseClient(clusterNameO)(ds)
     clusterNameO match {
       case None => client.createDb(dbName)
-      case Some(x) => client.createDbCluster(dbName)
+      case Some(x) =>
+        //Create Db on master
+        client.createDb(dbName)
+        //Create Db on slaves
+        client.createDbCluster(dbName)
     }
   }
 
- def createClickhouseTable(dbName: String, tableName: String, clusterNameO:Option[String])
-                           (implicit ds: ClickHouseDataSource){
-    val client = ClickhouseClient(clusterNameO)(ds)
-    val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName)
-    clusterNameO match {
-      case None => client.query(sqlStmt)
-      case Some(clusterName) =>
-        // create local table on every node
-        client.queryCluster(sqlStmt)
-        // create distrib table (view) on every node
-        val sqlStmt2 = s"CREATE TABLE IF NOT EXISTS ${dbName}.${tableName}_all AS ${dbName}.${tableName} ENGINE = Distributed($clusterName, $dbName, $tableName, rand());"
-        client.queryCluster(sqlStmt2)
-    }
-  }
-
-  def createClickhouseTable(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String], clusterNameO: Option[String] = None)
+  def createClickhouseTable(dbName: String, tableName: String, clusterNameO: Option[String] = None, partitionColumnName: Option[String] = None, indexColumns: Option[Seq[String]] = None)
                            (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
     val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName, partitionColumnName, indexColumns)
@@ -55,9 +44,13 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       case Some(clusterName) =>
         // create local table on every node
         client.queryCluster(sqlStmt)
-        // create distrib table (view) on every node
-        val sqlStmt2 = s"CREATE TABLE IF NOT EXISTS ${dbName}.${tableName}_all AS ${dbName}.${tableName} ENGINE = Distributed($clusterName, $dbName, $tableName, rand());"
-        client.queryCluster(sqlStmt2)
+        //create a temporary table with some engine
+        val tmpTableName = s"${tableName}_all"
+        val tmpTableCreateStatement = createClickhouseTableDefinitionSQL(dbName, tmpTableName, partitionColumnName, indexColumns)
+        client.query(tmpTableCreateStatement)
+        //create distrib table on master node using the same schema as that of tmp table name
+        val distributedTableCreateStatement = s"CREATE TABLE IF NOT EXISTS ${dbName}.${tableName} AS ${dbName}.${tmpTableName} ENGINE = Distributed($clusterName, $dbName, $tableName, rand());"
+        client.query(distributedTableCreateStatement)
     }
   }
 
@@ -89,7 +82,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       case Some(clusterName) =>
         // get nodes from cluster
         val client = ClickhouseClient(clusterNameO)(ds)
-        (s"${tableName}_all", client.getClusterNodes())
+        (tableName, client.getClusterNodes())
       case None =>
         (tableName, Seq(defaultHost))
     }
@@ -172,7 +165,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       case Some(clusterName) =>
         // get nodes from cluster
         val client = ClickhouseClient(clusterNameO)(ds)
-        (s"${tableName}_all", client.getClusterNodes())
+        (tableName, Seq(defaultHost))
       case None =>
         (tableName, Seq(defaultHost))
     }
@@ -249,7 +242,15 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
   }
 
-  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String])= {
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnNameOption: Option[String], indexColumnsOption: Option[Seq[String]]):String = {
+    (partitionColumnNameOption, indexColumnsOption) match {
+      case (Some(partitionColumnName), Some(indexColumns)) =>
+        createClickhouseTableDefinitionSQL(dbName, tableName, partitionColumnName, indexColumns)
+      case _ =>
+        createClickhouseTableDefinitionSQL(dbName, tableName)
+    }
+  }
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String]):String = {
 
     val header = s"""
           CREATE TABLE IF NOT EXISTS $dbName.$tableName(
@@ -267,7 +268,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     Seq(header, columnsStr, footer).mkString("\n")
   }
 
-  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String)= {
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String):String = {
 
     val header = s"""
           CREATE TABLE IF NOT EXISTS $dbName.$tableName(
