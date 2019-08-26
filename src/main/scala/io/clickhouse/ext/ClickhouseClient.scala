@@ -16,6 +16,16 @@ case class ClickhouseClient(clusterNameO: Option[String] = None)
     query(s"DROP DATABASE IF EXISTS $dbName")
   }
 
+  def dropTable(databaseName:String, tableName: String){
+    val deleteQuery = s"DROP TABLE IF EXISTS ${databaseName}.${tableName}"
+    clusterNameO match {
+      case Some(clusterName) =>
+        query(deleteQuery)
+        queryCluster(deleteQuery)
+      case None => query(deleteQuery)
+    }
+  }
+
   def query(sql: String) = {
     using(ds.getConnection){ conn =>
       val statement = conn.createStatement()
