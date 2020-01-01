@@ -9,15 +9,15 @@ case class ClickhouseClient(clusterNameO: Option[String] = None)
   import io.clickhouse.ext.ClickhouseResultSetExt._
 
   def createDb(dbName: String){
-    query(s"create database if not exists $dbName")
+    query(s"create database if not exists `$dbName`")
   }
 
   def dropDb(dbName: String){
-    query(s"DROP DATABASE IF EXISTS $dbName")
+    query(s"DROP DATABASE IF EXISTS `$dbName`")
   }
 
   def dropTable(databaseName:String, tableName: String){
-    val deleteQuery = s"DROP TABLE IF EXISTS ${databaseName}.${tableName}"
+    val deleteQuery = s"DROP TABLE IF EXISTS `${databaseName}`.${tableName}"
     clusterNameO match {
       case Some(clusterName) =>
         query(deleteQuery)
@@ -40,12 +40,12 @@ case class ClickhouseClient(clusterNameO: Option[String] = None)
   }
 
   def createDbCluster(dbName: String) = {
-    runOnAllNodes(s"create database if not exists $dbName")
+    runOnAllNodes(s"create database if not exists `$dbName`")
       .count(x => x._2 == null)
   }
 
   def dropDbCluster(dbName: String) = {
-    runOnAllNodes(s"DROP DATABASE IF EXISTS $dbName")
+    runOnAllNodes(s"DROP DATABASE IF EXISTS `$dbName`")
       .count(x => x._2 == null)
   }
 

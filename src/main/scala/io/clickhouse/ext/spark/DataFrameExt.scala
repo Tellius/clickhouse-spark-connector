@@ -49,7 +49,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
         val tmpTableCreateStatement = createClickhouseTableDefinitionSQL(dbName, tmpTableName, partitionColumnName, indexColumns)
         client.query(tmpTableCreateStatement)
         //create distrib table on master node using the same schema as that of tmp table name
-        val distributedTableCreateStatement = s"CREATE TABLE IF NOT EXISTS ${dbName}.${tableName} AS ${dbName}.${tmpTableName} ENGINE = Distributed($clusterName, $dbName, $tableName, rand());"
+        val distributedTableCreateStatement = s"CREATE TABLE IF NOT EXISTS `${dbName}`.${tableName} AS ${dbName}.${tmpTableName} ENGINE = Distributed($clusterName, `$dbName`, $tableName, rand());"
         client.query(distributedTableCreateStatement)
     }
   }
@@ -92,10 +92,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     val splittedRDD = splitRDD(df, maxConnections)
 
     // following code is going to be run on executors
-    val insertResults = splittedRDD.flatMap(split => split.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+    val insertResults = splittedRDD.flatMap(split => split.mapPartitionsWithIndex((partitionIndex:Int, partition: Iterator[org.apache.spark.sql.Row])=>{
 
-      val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
-      val targetHost = clickHouseHosts(rnd)
+      val modulo = (partitionIndex % clickHouseHosts.length)
+      val targetHost = clickHouseHosts(modulo)
       val targetHostDs = ClickhouseConnectionFactory.get(targetHost, defaultPort)
 
       // explicit closing
@@ -165,7 +165,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       case Some(clusterName) =>
         // get nodes from cluster
         val client = ClickhouseClient(clusterNameO)(ds)
-        (tableName, Seq(defaultHost))
+        (tableName, client.getClusterNodes())
       case None =>
         (tableName, Seq(defaultHost))
     }
@@ -175,10 +175,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     val splittedRDD = splitRDD(df, maxConnections)
 
     // following code is going to be run on executors
-    val insertResults = splittedRDD.flatMap(split => split.mapPartitions((partition: Iterator[org.apache.spark.sql.Row])=>{
+    val insertResults = splittedRDD.flatMap(split => split.mapPartitionsWithIndex((partitionIndex:Int, partition: Iterator[org.apache.spark.sql.Row]) => {
 
-      val rnd = scala.util.Random.nextInt(clickHouseHosts.length)
-      val targetHost = clickHouseHosts(rnd)
+      val modulo = (partitionIndex % clickHouseHosts.length)
+      val targetHost = clickHouseHosts(modulo)
       val targetHostDs = ClickhouseConnectionFactory.get(targetHost, defaultPort)
 
       // explicit closing
@@ -233,13 +233,13 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
   private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String) = {
     val columns = schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
-    s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
+    s"INSERT INTO `$dbName`.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
   }
 
   private def generateInsertStatment(schema: org.apache.spark.sql.types.StructType, dbName: String, tableName: String, partitionColumnName: String) = {
     val columns = partitionColumnName :: schema.map(f => f.name).toList
     val vals = 1 to (columns.length) map (i => "?")
-    s"INSERT INTO $dbName.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
+    s"INSERT INTO `$dbName`.$tableName (${columns.mkString(",")}) VALUES (${vals.mkString(",")})"
   }
 
   private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnNameOption: Option[String], indexColumnsOption: Option[Seq[String]]):String = {
@@ -253,7 +253,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
   private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String, partitionColumnName: String, indexColumns: Seq[String]):String = {
 
     val header = s"""
-          CREATE TABLE IF NOT EXISTS $dbName.$tableName(
+          CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
           """
 
     val columns = s"$partitionColumnName Date" :: df.schema.map{ f =>
@@ -271,7 +271,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
   private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String):String = {
 
     val header = s"""
-          CREATE TABLE IF NOT EXISTS $dbName.$tableName(
+          CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
           """
 
     val columns = df.schema.map{ f =>
