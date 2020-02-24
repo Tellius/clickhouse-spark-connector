@@ -39,20 +39,18 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
                            (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
     val sqlStmt = createClickhouseTableDefinitionSQL(dbName, tableName, partitionColumnName, indexColumns,
-      primaryKeyColumnOption,isReplicationNeeded)
+      primaryKeyColumnOption, isReplicationNeeded)
     clusterNameO match {
       case None => client.query(sqlStmt)
       case Some(clusterName) =>
-        // create local table on every node
-        client.queryCluster(sqlStmt)
-        //create a temporary table with some engine
-        val tmpTableName = s"${tableName}_all"
-        val tmpTableCreateStatement = createClickhouseTableDefinitionSQL(dbName, tmpTableName, 
+        //create a temporary table with replicated/local table on all nodes
+        val replTableName = s"${tableName}_local"
+        val replTableCreateStatement = createClickhouseTableDefinitionSQL(dbName, replTableName, 
           partitionColumnName, indexColumns, primaryKeyColumnOption, isReplicationNeeded)
-        client.query(tmpTableCreateStatement)
-        //create distrib table on master node using the same schema as that of tmp table name
-        val distributedTableCreateStatement = s"CREATE TABLE IF NOT EXISTS `${dbName}`.${tableName} AS ${dbName}.${tmpTableName} ENGINE = Distributed($clusterName, `$dbName`, $tableName, rand());"
-        client.query(distributedTableCreateStatement)
+        client.queryCluster(replTableCreateStatement)
+        //create distrib table on all nodes
+        val distributedTableCreateStatement = createClickhouseDistTableDefinitionSQL(clusterName, dbName, tableName, replTableName, partitionColumnName)//s"CREATE TABLE IF NOT EXISTS `${dbName}`.${tableName} AS ${dbName}.${replTableName} ENGINE = Distributed($clusterName, `$dbName`, $replTableName, rand());"
+        client.queryCluster(distributedTableCreateStatement)
     }
   }
 
@@ -263,12 +261,11 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
           """
 
     val columns = s"$partitionColumnName Date" :: df.schema.map{ f =>
-      Seq(f.name, sparkType2ClickhouseType(f.dataType)).mkString(" ")
+      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
     }.toList
     val columnsStr = columns.mkString(",\n")
 
     val footer = s""")ENGINE = ReplicatedMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}', '{replica}')
-          PARTITION BY toYYYYMM($partitionColumnName)
           ORDER BY ($partitionColumnName, intHash32($primaryKeyColumn))
           SAMPLE BY intHash32($primaryKeyColumn)
           """    
@@ -288,6 +285,24 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
 
     val footer = s"""
           )ENGINE = Log;
+          """
+
+    Seq(header, columnsStr, footer).mkString("\n")
+  }
+
+  private def createClickhouseDistTableDefinitionSQL(clusterName:String, dbName: String, tableName: String, replTableName:String, partitionColumnNameOption:Option[String]):String = {
+
+    val header = s"""
+          CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
+          """
+
+    val columns = partitionColumnNameOption.map(partitionColumnName => s"$partitionColumnName Date").getOrElse("") :: df.schema.map{ f =>
+      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+    }.toList
+    val columnsStr = columns.mkString(",\n")
+
+    val footer = s"""
+          )ENGINE = Distributed($clusterName, `$dbName`, $replTableName, rand());;
           """
 
     Seq(header, columnsStr, footer).mkString("\n")

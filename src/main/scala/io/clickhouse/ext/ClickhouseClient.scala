@@ -18,10 +18,11 @@ case class ClickhouseClient(clusterNameO: Option[String] = None)
 
   def dropTable(databaseName:String, tableName: String){
     val deleteQuery = s"DROP TABLE IF EXISTS `${databaseName}`.${tableName}"
+    val replTableDeleteQuery = s"DROP TABLE IF EXISTS `${databaseName}`.${tableName}_local"
     clusterNameO match {
       case Some(clusterName) =>
-        query(deleteQuery)
         queryCluster(deleteQuery)
+        queryCluster(replTableDeleteQuery)
       case None => query(deleteQuery)
     }
   }
