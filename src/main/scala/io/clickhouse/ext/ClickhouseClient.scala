@@ -28,6 +28,7 @@ case class ClickhouseClient(clusterNameO: Option[String] = None)
   }
 
   def query(sql: String) = {
+    println(s"Querying Cluster on ${ds.getUrl} $sql")
     using(ds.getConnection){ conn =>
       val statement = conn.createStatement()
       val rs = statement.executeQuery(sql)
