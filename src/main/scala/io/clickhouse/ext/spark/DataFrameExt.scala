@@ -248,6 +248,8 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     (partitionColumnNameOption, isReplicationNeeded, primaryKeyColumnOption) match {
       case (Some(partitionColumnName), true, Some(primaryKeyColumn)) =>
         createClickhouseTableDefinitionSQL(dbName, tableName, partitionColumnName,primaryKeyColumn)
+      case (Some(partitionColumnName),false,None) => 
+        createClickhouseTableDefinitionSQL(dbName,tableName, partitionColumnName)
       case _ =>
         createClickhouseTableDefinitionSQL(dbName, tableName)
     }
@@ -266,6 +268,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     val columnsStr = columns.mkString(",\n")
 
     val footer = s""")ENGINE = ReplicatedMergeTree('/clickhouse/{installation}/{cluster}/tables/{shard}/{database}/{table}', '{replica}')
+          PARTITION BY toYYYYMM($partitionColumnName)
           ORDER BY ($partitionColumnName, intHash32($primaryKeyColumn))
           SAMPLE BY intHash32($primaryKeyColumn)
           """    
@@ -290,6 +293,29 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     Seq(header, columnsStr, footer).mkString("\n")
   }
 
+  private def createClickhouseTableDefinitionSQL(dbName: String, tableName: String,partitionColumnName:String):String = {
+
+    val header = s"""
+          CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
+          """
+
+    val columns = s"$partitionColumnName Date" :: df.schema.map{ f =>
+      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+    }.toList
+    val columnsStr = columns.mkString(",\n")
+
+    val footer = s"""
+          ) 
+          ENGINE = MergeTree()
+          PARTITION BY toYYYYMM($partitionColumnName)
+          ORDER BY tuple()
+          """
+
+    Seq(header, columnsStr, footer).mkString("\n")
+  }
+
+
+
   private def createClickhouseDistTableDefinitionSQL(clusterName:String, dbName: String, tableName: String, replTableName:String, partitionColumnNameOption:Option[String]):String = {
 
     val header = s"""
@@ -301,7 +327,10 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
     }.toList
     val columnsStr = columns.flatten.mkString(",\n")
 
-    val footer = s"""
+    val footer = if(partitionColumnNameOption.isDefined) s"""
+          )ENGINE = Distributed($clusterName, `$dbName`, $replTableName, toYYYYMM(${partitionColumnNameOption.get}));;
+          """
+        else s"""
           )ENGINE = Distributed($clusterName, `$dbName`, $replTableName, rand());;
           """
 
