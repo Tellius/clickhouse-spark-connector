@@ -260,8 +260,8 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
           CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
           """
 
-    val columns = s"$partitionColumnName Date" :: df.schema.map{ f =>
-      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+    val columns = s"`$partitionColumnName` Date" :: df.schema.map{ f =>
+      Seq(s"`${f.name}`", sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
     }.toList
     val columnsStr = columns.mkString(",\n")
 
@@ -279,7 +279,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
           """
 
     val columns = df.schema.map{ f =>
-      Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
+      Seq(s"`${f.name}`", sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" ")
     }.toList
     val columnsStr = columns.mkString(",\n")
 
@@ -296,8 +296,8 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
           CREATE TABLE IF NOT EXISTS `$dbName`.$tableName(
           """
 
-    val columns = partitionColumnNameOption.map(partitionColumnName => s"$partitionColumnName Date") :: df.schema.map{ f =>
-      Some(Seq(f.name, sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" "))
+    val columns = partitionColumnNameOption.map(partitionColumnName => s"`$partitionColumnName` Date") :: df.schema.map{ f =>
+      Some(Seq(s"`${f.name}`", sparkType2ClickhouseType(f.dataType, f.nullable)).mkString(" "))
     }.toList
     val columnsStr = columns.flatten.mkString(",\n")
 
