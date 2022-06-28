@@ -2,7 +2,7 @@ organization := "ru.yandex.clickhouse"
 
 name := """clickhouse-spark-connector"""
 
-version := "1.2.6"
+version := "1.2.7"
 
 scalaVersion := "2.11.7"
 
