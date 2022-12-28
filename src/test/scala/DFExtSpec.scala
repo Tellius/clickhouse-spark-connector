@@ -84,7 +84,7 @@ class TestSpec extends FlatSpec with Matchers {
     // create db / table
     df.dropClickhouseDb(db, clusterName)
     df.createClickhouseDb(db, clusterName)
-    df.createClickhouseTable(db, tableName, "mock_date", Seq("name"), clusterNameO = clusterName)
+    df.createClickhouseTable(db, tableName, partitionColumnName = Some("mock_date"), clusterNameO = clusterName)
     df.createClickhouseTable(db,tableName, clusterName)
 
     // save data
