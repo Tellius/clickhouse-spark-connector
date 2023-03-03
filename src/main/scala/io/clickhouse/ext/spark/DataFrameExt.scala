@@ -7,6 +7,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Row}
 
+import scala.util.Try
+
 object ClickhouseSparkExt{
   implicit def extraOperations(df: org.apache.spark.sql.DataFrame) = DataFrameExt(df)
 }
@@ -327,6 +329,15 @@ val clickHouseType = sparkType match {
       s"Nullable($clickHouseType)"
     else
       clickHouseType
+  }
+
+  def trimDataFrameTimeStamp(timeStampCols: Seq[String], dateFormatOpt: Option[String] = None): DataFrame = {
+    val dateFormat = dateFormatOpt.getOrElse("yyyy-MM-dd HH:mm:ss.SSS")
+    import org.apache.spark.sql.functions._
+    import java.sql.Timestamp
+    timeStampCols.foldLeft(df)((localDf, timeCol) =>
+      Try(localDf.withColumn(timeCol, date_format(col(timeCol), dateFormat).cast(TimestampType))).getOrElse(localDf)
+    )
   }
 
 }
