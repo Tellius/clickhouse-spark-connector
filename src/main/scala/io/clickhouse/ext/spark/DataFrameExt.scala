@@ -82,7 +82,8 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
       case Some(clusterName) =>
         // get nodes from cluster
         val client = ClickhouseClient(clusterNameO)(ds)
-        (tableName, client.getClusterNodes())
+        val localTable = s"${tableName}_local"
+        (localTable, client.getClusterNodes())
       case None =>
         (tableName, Seq(defaultHost))
     }
