@@ -13,6 +13,14 @@ object ClickhouseSparkExt{
 
 case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable {
 
+  // TEL-16537: clickhouse-jdbc 0.1.54 corrupts precision when a Double is bound via setObject in its
+  // scientific-notation string/binary form (e.g. 206972941671395.0 -> 206972941671395.03). Binding the
+  // plain (non-exponential) decimal text instead avoids the bug; NaN/Infinite can't go through BigDecimal.
+  private def jdbcSafeValue(value: Any): Any = value match {
+    case d: java.lang.Double if !d.isNaN && !d.isInfinite => java.math.BigDecimal.valueOf(d).toPlainString
+    case other => other
+  }
+
   def dropClickhouseDb(dbName: String, clusterNameO: Option[String] = None)
                       (implicit ds: ClickHouseDataSource){
     val client = ClickhouseClient(clusterNameO)(ds)
@@ -121,7 +129,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
             val fieldName = f.name
             val fieldIdx = row.fieldIndex(fieldName)
             val fieldVal = row.get(fieldIdx)
-            statement.setObject(fieldIdx + 2, fieldVal)
+            statement.setObject(fieldIdx + 2, jdbcSafeValue(fieldVal))
           }
           statement.addBatch()
 
@@ -200,7 +208,7 @@ case class DataFrameExt(df: org.apache.spark.sql.DataFrame) extends Serializable
             val fieldName = f.name
             val fieldIdx = row.fieldIndex(fieldName)
             val fieldVal = row.get(fieldIdx)
-            statement.setObject(fieldIdx + 1, fieldVal)
+            statement.setObject(fieldIdx + 1, jdbcSafeValue(fieldVal))
           }
           statement.addBatch()
 
